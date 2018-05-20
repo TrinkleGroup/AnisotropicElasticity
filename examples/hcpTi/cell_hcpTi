@@ -1,0 +1,8 @@
+2.931				# lattice constant [Angstroms]
+1.0 0.0 0.0			# hcp unit cell vectors
+-0.5 0.86602540378 0.0	
+0.0 0.0 1.596
+9 174 95 72 188 58	# crystal class = hexagonal(9); C11, C12, C13, C33, C44 [GPa]
+2					# 2 atoms per hcp unit cell
+0.3333333333333333  0.6666666666666667  0.25	# atom locations in unit cell (direct coords)
+0.6666666666666667  0.3333333333333333  0.75

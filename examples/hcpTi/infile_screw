@@ -1,0 +1,3 @@
+0  0  1 	# dislocation threading vector [t1 t2 t3] (unit cell coord.)
+0  0  1  1  # burgers vector [b1 b2 b3]/bd (unit cell coord.)
+1  2  0  	# dislocation cut vector [m1 m2 m3] (unit cell coord.)

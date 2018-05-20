@@ -1,0 +1,7 @@
+2.82959				# lattice constant [Angstroms]
+-0.5 0.5 0.5		# bcc primitive unit cell vectors
+0.5 -0.5 0.5
+0.5 0.5 -0.5
+4 279.5 149.6 100.5	# crystal class = cubic(4); C11, C12, C44 [GPa]
+1					# 1 atom per bcc unit cell
+0.0 0.0 0.0 Fe		# atom locations in unit cell (direct coords)

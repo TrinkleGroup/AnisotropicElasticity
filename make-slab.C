@@ -292,10 +292,10 @@ int main ( int argc, char **argv )
 
   //  c1 c2 c3 cd           # center of dislocation
   //  c1' c2' c3'
-  fgets(dump, sizeof(dump), infile);
+  char *p_fgets = fgets(dump, sizeof(dump), infile);
   sscanf(dump, "%d %d %d %d", &cu0[0], &cu0[1], &cu0[2], &cu_denom);
   if (cu_denom == 0) cu_denom = 1;
-  fgets(dump, sizeof(dump), infile);
+  p_fgets = fgets(dump, sizeof(dump), infile);
   sscanf(dump, "%lf %lf %lf", &cint0[0], &cint0[1], &cint0[2]);
   for (int d=0; d<3; ++d) cint0[d] += ((double) cu0[d])/((double) cu_denom);
 

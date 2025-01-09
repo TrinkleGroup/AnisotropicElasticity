@@ -40,13 +40,12 @@
 	   stovepipe multiple anisotropic calls to, e.g., create a pair of
 	   partials.
 
-  Param.:  <cell> <infile> <undisloc> <reference> <outputstrainfile>
+  Param.:  <cell> <infile> <undisloc> <reference>
            cell:      cell file (see below for format)
            infile:    input file (see below for format)
 	       undisloc:  undislocated crystal input XYZ file
            reference: input XYZ file to be used as reference for evaluating 
                       the displacement field (undislocated/dislocated crystal)
-           outputstrainfile: file to output the strain tensor
 
 	   ==== cell ====
        a0                               # Scale factor for unit cell
@@ -79,13 +78,6 @@
        atomtype x y z
        ...
        ==== reference ====
- 
-       ==== outputstrainfile ====
-       N               # standard xyz format
-       comment
-       atomtype xx xy xz yx yy yz zx zy zz
-       ...
-       ==== outputstrainfile ====
 
 
   Flags:   MEMORY:  our setting for step size
@@ -261,128 +253,6 @@ void print_mat (double a[9])
   }
 }
 
-void calcstrain(double x, double theta, double m0[3], double n0[3], double Cijkl[9][9], double Sint[9], double b0[3], double Bint[9], double strain[9])
-{
-    double mt[3], nt[3], nnt[9], nmt[9], nni[9], nninm[9];
-    
-    //calc theta pieces
-    m_theta(theta, m0, n0, mt);
-    n_theta(theta, m0, n0, nt);
-    a_mult_a(nt, Cijkl, nnt);
-    a_mult_b(nt, mt, Cijkl, nmt);
-    double detnn = 1./inverse(nnt, nni);
-    for (int i=0; i<9; ++i) nni[i] *= detnn;
-    mult(nni, nmt, nninm);
-    
-    //strain
-    double Sb[3], NBb[3], NB[9], LS[9], sum[9],strain_tot[9];
-    mult_vect(Sint, b0, Sb);
-    mult(nni, Bint, NB);
-    mult(nninm, Sint, LS);
-    for (int i=0; i<9; ++i) sum[i] = 4.0*M_PI*NB[i] + LS[i];
-    mult_vect(sum, b0, NBb);
-    
-    for(int idx = 0; idx < 3; ++idx) {
-        for(int jdx = 0; jdx < 3; ++jdx) {
-            strain_tot[idx + 3*jdx] = 0.5*M_1_PI*(-mt[jdx]*Sb[idx] + nt[jdx]*NBb[idx])/x;
-        }
-    }
-    // symmetrize strain
-    for(int idx = 0; idx < 3; ++idx) {
-        for(int jdx = 0; jdx < 3; ++jdx) {
-            strain[idx + 3*jdx] = 0.5*(strain_tot[idx + 3*jdx] + strain_tot[jdx + 3*idx]);
-        }
-    }
-    
-}
-
-
-void calcstrain_fd(double mcoord, double ncoord, double aln, double inv_dtheta, double xyz0[3], double** u_xyz, double strain[9])
-{
-    // Consider a point slightly in the +m direction:
-    double dist_posdisp_m = sqrt((mcoord+0.0001)*(mcoord+0.0001) + ncoord*ncoord);
-    double theta_posdisp_m = atan2(ncoord, (mcoord+0.0001));
-    if (theta_posdisp_m < 0.) theta_posdisp_m += (2.*M_PI);
-    
-    // Compute displacements at this point:
-    // xyz0*(ln|x| - ln(a0)) + u_xyz(theta)
-    double lnr_posdisp_m = log(dist_posdisp_m) + aln;
-    // Now, linearly interpolate for theta:
-    double kreal_posdisp_m = theta_posdisp_m * inv_dtheta;
-    int k_posdisp_m = (int) kreal_posdisp_m;
-    double alpha_posdisp_m = kreal_posdisp_m - k_posdisp_m, beta_posdisp_m = 1. - alpha_posdisp_m;
-    
-    double disp_posdisp_m[3];
-    for (int d=0; d<3; ++d) {
-        disp_posdisp_m[d] = xyz0[d]*lnr_posdisp_m + beta_posdisp_m*u_xyz[k_posdisp_m][d] + alpha_posdisp_m*u_xyz[k_posdisp_m+1][d];
-    }
-    
-    // Consider a point slightly in the -m direction:
-    double dist_negdisp_m = sqrt((mcoord-0.0001)*(mcoord-0.0001) + ncoord*ncoord);
-    double theta_negdisp_m = atan2(ncoord, (mcoord-0.0001));
-    if (theta_negdisp_m < 0.) theta_negdisp_m += (2.*M_PI);
-    
-    // Compute displacements at this point:
-    // xyz0*(ln|x| - ln(a0)) + u_xyz(theta)
-    double lnr_negdisp_m = log(dist_negdisp_m) + aln;
-    // Now, linearly interpolate for theta:
-    double kreal_negdisp_m = theta_negdisp_m * inv_dtheta;
-    int k_negdisp_m = (int) kreal_negdisp_m;
-    double alpha_negdisp_m = kreal_negdisp_m - k_negdisp_m, beta_negdisp_m = 1. - alpha_negdisp_m;
-
-    double disp_negdisp_m[3];
-    for (int d=0; d<3; ++d) {
-        disp_negdisp_m[d] = xyz0[d]*lnr_negdisp_m + beta_negdisp_m*u_xyz[k_negdisp_m][d] + alpha_negdisp_m*u_xyz[k_negdisp_m+1][d];
-    }
-
-    // Consider a point slightly in the +n direction:
-    double dist_posdisp_n = sqrt(mcoord*mcoord + (ncoord+0.0001)*(ncoord+0.0001));
-    double theta_posdisp_n = atan2((ncoord+0.0001), mcoord);
-    if (theta_posdisp_n  < 0.) theta_posdisp_n += (2.*M_PI);
-    
-    // Compute displacements at this point:
-    // xyz0*(ln|x| - ln(a0)) + u_xyz(theta)
-    double lnr_posdisp_n = log(dist_posdisp_n) + aln;
-    // Now, linearly interpolate for theta:
-    double kreal_posdisp_n = theta_posdisp_n * inv_dtheta;
-    int k_posdisp_n = (int) kreal_posdisp_n;
-    double alpha_posdisp_n = kreal_posdisp_n - k_posdisp_n, beta_posdisp_n = 1. - alpha_posdisp_n;
-    
-    double disp_posdisp_n[3];
-    for (int d=0; d<3; ++d) {
-        disp_posdisp_n[d] = xyz0[d]*lnr_posdisp_n + beta_posdisp_n*u_xyz[k_posdisp_n][d] + alpha_posdisp_n*u_xyz[k_posdisp_n+1][d];
-    }
-    
-    // Consider a point slightly in the -n direction:
-    double dist_negdisp_n = sqrt(mcoord*mcoord + (ncoord-0.0001)*(ncoord-0.0001));
-    double theta_negdisp_n = atan2((ncoord-0.0001), mcoord);
-    if (theta_negdisp_n  < 0.) theta_negdisp_n += (2.*M_PI);
-
-    // Compute displacements at this point:
-    // xyz0*(ln|x| - ln(a0)) + u_xyz(theta)
-    double lnr_negdisp_n = log(dist_negdisp_n) + aln;
-    // Now, linearly interpolate for theta:
-    double kreal_negdisp_n = theta_negdisp_n * inv_dtheta;
-    int k_negdisp_n = (int) kreal_negdisp_n;
-    double alpha_negdisp_n = kreal_negdisp_n - k_negdisp_n, beta_negdisp_n = 1. - alpha_negdisp_n;
-
-    double disp_negdisp_n[3];
-    for (int d=0; d<3; ++d) {
-        disp_negdisp_n[d] = xyz0[d]*lnr_negdisp_n + beta_negdisp_n*u_xyz[k_negdisp_n][d] + alpha_negdisp_n*u_xyz[k_negdisp_n+1][d];
-    }
-    
-    // compute strains using finite differences (central differences)
-    strain[0] = (disp_posdisp_m[0] - disp_negdisp_m[0])/0.0002; //eps_mm
-    strain[1] = 0.5*((disp_posdisp_m[1] - disp_negdisp_m[1])/0.0002 + (disp_posdisp_n[0] - disp_negdisp_n[0])/0.0002); //eps_mn
-    strain[2] = 0.5*((disp_posdisp_m[2] - disp_negdisp_m[2])/0.0002 + 0.0); //eps_mt -> should be 0
-    strain[3] = strain[1]; //eps_nm
-    strain[4] = (disp_posdisp_n[1] - disp_negdisp_n[1])/0.0002; //eps_nn
-    strain[5] = 0.5*((disp_posdisp_n[2] - disp_negdisp_n[2])/0.0002 + 0.0); //eps_nt -> should be 0
-    strain[6] = strain[2]; //eps_tm -> should be 0
-    strain[7] = strain[5]; //eps_tn -> should be 0
-    strain[8] = 0.0; //eps_tt -> should be 0
-}
-
 
 /*================================= main ==================================*/
 
@@ -390,7 +260,7 @@ void calcstrain_fd(double mcoord, double ncoord, double aln, double inv_dtheta, 
 const int NUMARGS = 4;
 const char* ARGLIST = "[-hvt] [-s STEPS] cell infile undisloc reference";
 
-const char* ARGEXPL =
+const char* ARGEXPL = 
 " cell:      cell file (-h for format)\n\
   infile:    input file (-h for format)\n\
   undisloc:  undislocated crystal input XYZ file\n\
@@ -503,7 +373,6 @@ int main ( int argc, char **argv )
   char *infile_name = argv[1];
   char *undisloc_name = argv[2];
   char *reference_name = argv[3];
-  char *strainfile_name = argv[4];
   FILE* infile;
   FILE* infile_ref;
 
@@ -784,7 +653,6 @@ int main ( int argc, char **argv )
     u_xyz[k][2] = dot(u[k-Nsteps], t0) * tmagn + u_xyz[Nsteps][2];
   }
 
-    
   
   // ****************************** OUTPUT ***************************
 
@@ -861,18 +729,13 @@ int main ( int argc, char **argv )
     int Nslab;
     // Natoms
     nextnoncomment(dump, sizeof(dump), infile);
-    printf(dump);
+    printf("%s\n", dump);
     sscanf(dump, "%d", &Nslab);
     nextnoncomment(dump, sizeof(dump), infile_ref); // dummy readline
     // comment
     nextnoncomment(dump, sizeof(dump), infile);
-    printf(dump);
+    printf("%s\n", dump);
     nextnoncomment(dump, sizeof(dump), infile_ref); // dummy readline
-      
-    FILE *strainfile = myopenw(strainfile_name);
-    fprintf(strainfile, "%d\n", Nslab);
-    fprintf(strainfile, "%s", dump);
-      
     for (int n=0; n<Nslab; ++n) {
       char atomname[512];
       double xyz[3];
@@ -887,7 +750,7 @@ int main ( int argc, char **argv )
       // Now, we need to do some analysis on our displacements; first,
       // we need to calculate the distance from the dislocation,
       // and the magical angle theta for each:
-      double dist_ref = sqrt(xyz_ref[0]*xyz_ref[0] + xyz_ref[1]*xyz_ref[1]);
+      double dist_ref = sqrt( xyz_ref[0]*xyz_ref[0] + xyz_ref[1]*xyz_ref[1]);
       ERROR = dcomp(dist_ref, 0.);
       double theta_ref = atan2(xyz_ref[1], xyz_ref[0]);
       if (theta_ref < 0.) theta_ref += (2.*M_PI);
@@ -903,18 +766,11 @@ int main ( int argc, char **argv )
       double kreal = theta_ref * inv_dtheta;
       int k = (int) kreal;
       double alpha = kreal - k, beta = 1. - alpha;
-      //double disp[3];
       for (int d=0; d<3; ++d) {
-          xyz[d] += xyz0[d]*lnr + beta*u_xyz[k][d] + alpha*u_xyz[k+1][d];
+	    xyz[d] += xyz0[d]*lnr + beta*u_xyz[k][d] + alpha*u_xyz[k+1][d];
       }
       // output
       printf("%s %20.15lf %20.15lf %20.15lf\n", atomname, xyz[0], xyz[1], xyz[2]);
-        
-      double strain_xyz[9];
-      //alcstrain(dist_ref, theta_ref, m0, n0, Cijkl, Sint, b0, Bint, strain_xyz);
-      calcstrain_fd(xyz_ref[0], xyz_ref[1], aln, inv_dtheta, xyz0, u_xyz, strain_xyz);
-
-      fprintf(strainfile, "%s % 20.15lf % 20.15lf % 20.15lf % 20.15lf % 20.15lf % 20.15lf % 20.15lf % 20.15lf % 20.15lf %20.15lf\n", atomname, strain_xyz[0], strain_xyz[1], strain_xyz[2], strain_xyz[3], strain_xyz[4], strain_xyz[5], strain_xyz[6], strain_xyz[7], strain_xyz[8], dist_ref);
     }
     myclose(infile);
     myclose(infile_ref);

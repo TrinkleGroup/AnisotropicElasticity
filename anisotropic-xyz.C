@@ -700,11 +700,11 @@ int main ( int argc, char **argv )
     int Nslab;
     // Natoms
     nextnoncomment(dump, sizeof(dump), infile);
-    printf(dump);
+    printf("%s\n", dump);
     sscanf(dump, "%d", &Nslab);
     // comment
     nextnoncomment(dump, sizeof(dump), infile);
-    printf(dump);
+    printf("%s\n", dump);
     for (int n=0; n<Nslab; ++n) {
       char atomname[512];
       double xyz[3];

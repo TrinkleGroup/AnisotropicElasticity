@@ -770,11 +770,11 @@ int main ( int argc, char **argv )
     int Nslab;
     // Natoms
     nextnoncomment(dump, sizeof(dump), infile);
-    printf(dump);
+    printf("%s\n", dump);
     sscanf(dump, "%d", &Nslab);
     // comment
     nextnoncomment(dump, sizeof(dump), infile);
-    printf(dump);
+    printf("%s\n", dump);
 
     FILE *strainfile = myopenw(strainfile_name);
     

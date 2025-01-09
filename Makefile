@@ -10,7 +10,8 @@ CFLAGS = -O5
 CPPFLAGS = -O5
 
 # bcc map removed, as well as nnpair.H drawfig.H
-TARGET = make-slab
+TARGET = make-slab anisotropic anisotropic-xyz anisotropic-xyz-ref \
+         anisotropic-xyz-ref-outputstrain anisotropic-xyz-strain
 INCLUDES = cell.H dcomp.H drawfig.H elastic.H integrate.H io.H matrix.H nnpair.H slab.H
 
 all: ${TARGET}

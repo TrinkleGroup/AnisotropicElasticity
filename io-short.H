@@ -40,7 +40,7 @@ const char COMMENT_CHAR = '#';
 const char EOF_CHAR = '&';
 
 inline void nextnoncomment (char* dump, const int &size, FILE* infile) 
-{ do {fgets(dump, size, infile);} 
+{ do {char *p_fgets=fgets(dump, size, infile);} 
   while ((!feof(infile)) && (dump[0] == COMMENT_CHAR)); }
 
 #endif

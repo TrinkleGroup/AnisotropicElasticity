@@ -1,7 +1,7 @@
 /*
-  Program: anisotropic-xyz-ref.C
-  Author:  D. Trinkle (slight modification by Anne Marie Tan)
-  Date:    August 14, 2003 (modified August 21, 2015)
+  Program: anisotropic.C
+  Author:  D. Trinkle
+  Date:    August 14, 2003
   Purpose: Calculate the anisotropic elastic solution for a general
            dislocation given:
 	   1. dislocation line vector t = |t| (t1, t2, t3)
@@ -18,67 +18,40 @@
 	   unless it's zero; then n0 = t x m0.  Note: m0 is to be 
 	   perpendicular to t and in the plane of n0.
 
-	   This new version reads in 2 XYZ files, where x=m, y=n, z=t.
-       The first file is the undislocated geometry, the second file is the 
-       "reference" geometry. The displacement field is evaluated according 
-       to the "reference" geometry and then applied onto the undislocated 
-       geometry, centered at (0,0). R_disloc = R_undisloc + u(R_reference).
- 
-       Ideally, you would want to run this code multiple times until self-
-       consistency is achieved. The first time this code is called, 
-       R_reference = R_undisloc. Subsequently, R_reference = R_disloc from
-       the previous time. This is repeated until the new R_disloc = R_reference.
+	   Changes needed:
 
-	   You need to be VERY CAREFUL to be consistent about
-	   what information you feed this routine--it does next to no
-	   checks on its own, so you can easily get nonsense out.
+	   1. Allow for *multiple* dislocations to be created (i.e.,
+	      partials)
+	   2. Easier input of center (use rationals + reals ?)
+	   3. Allow entry of cubic Miller indices for fcc / bcc lattices
 
-	   This code does NOT shift the origin in any way--it puts the
-	   displacement field right at 0,0.  It needs a good "makeslab"
-	   type code to construct the undislocated slab first, with the
-	   appropriate center.  But this has the advantage that you can
-	   stovepipe multiple anisotropic calls to, e.g., create a pair of
-	   partials.
-
-  Param.:  <cell> <infile> <undisloc> <reference>
-           cell:      cell file (see below for format)
-           infile:    input file (see below for format)
-	       undisloc:  undislocated crystal input XYZ file
-           reference: input XYZ file to be used as reference for evaluating 
-                      the displacement field (undislocated/dislocated crystal)
+  Param.:  <atomname> <cell> <infile> <Rcut> <undisloc> <disloc>
+           atomname: appended to each line of xyz files
+           cell:     cell file (see below for format)
+           infile:   input file (see below for format)
+	   Rcut:     maximum cutoff radius for xyz files
+	   undisloc: undislocated crystal output file
+	   disloc:   dislocated crystal output file
 
 	   ==== cell ====
-       a0                               # Scale factor for unit cell
-       a1.x a1.y a1.z                   # Cartesian coord of unit cell
-       a2.x a2.y a2.z
-       a3.x a3.y a3.z
-       crystal-class <C_11> ... <C_66>  # Crystal class and elastic const.
-       Natoms                           # Number of atoms in first unit cell
-       u1.1 u1.2 u1.3                   # Atom locations, in direct coord.
-       ...
-       uN.1 uN.2 uN.3
+           a0                            # Scale factor for unit cell
+           a1.x a1.y a1.z                # Cartesian coord of unit cell
+           a2.x a2.y a2.z
+           a3.x a3.y a3.z
+           crystal-class <C_11> ... <C_66>  # Crystal class and elastic const.
+           Natoms                        # Number of atoms in first unit cell
+           u1.1 u1.2 u1.3                # Atom locations, in direct coord.
+           ...
+           uN.1 uN.2 uN.3
 	   ==== cell ====
 	   
 	   ==== infile ====
 	   t1 t2 t3     # dislocation line direction (unit cell coord.)
 	   b1 b2 b3 bd  # burgers vector (unit cell coord.)/bd
 	   m1 m2 m3     # dislocation cut vector (perp. to t, in slip plane)
+	   c1 c2 c3 cd  # center of dislocation in unit cell ([c1 c2 c3]/cd)
+	   c1' c2' c3'  # center of dislocation (shifts are added)
 	   ==== infile ====
-
-	   ==== undisloc ====
-	   N               # standard xyz format
-	   comment         # this *should* be the threading length
-	   atomtype x y z
-	   ...
-	   ==== undisloc ====
- 
-       ==== reference ====
-       N               # standard xyz format
-       comment         # this *should* be the threading length
-       atomtype x y z
-       ...
-       ==== reference ====
-
 
   Flags:   MEMORY:  our setting for step size
 	   VERBOSE: output the displacement fields too
@@ -169,19 +142,20 @@
 	   displacements... not too hard.
 */
 
-// ************************** COMPILIATION OPTIONS ***********************
+//************************** COMPILIATION OPTIONS ************************
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <unistd.h>
 #include <libgen.h>
+#include "io-short.H"   // All of our "read in file", etc.
 #include "dcomp.H"
-#include "io-short.H"
 #include "matrix.H"
 #include "elastic.H"
 #include "cell.H"
 #include "integrate.H"
+#include "slab.H"  // This is where we learn how to make a cylindrical slab.
 
 // This is the permutation matrix; eps[i][j][k] =
 //  1: if ijk is an even permutation of (012)
@@ -193,7 +167,7 @@ const int eps[3][3][3] = {
   {{0,1,0}, {-1,0,0}, {0,0,0}}
 };
 
-// ****************************** SUBROUTINES ****************************
+//****************************** SUBROUTINES ****************************
 
 inline double dot(double a[3], double b[3])
 {
@@ -257,14 +231,19 @@ void print_mat (double a[9])
 /*================================= main ==================================*/
 
 // Arguments first, then flags, then explanation.
-const int NUMARGS = 4;
-const char* ARGLIST = "[-hvt] [-s STEPS] cell infile undisloc reference";
+const int NUMARGS = 6;
+const char* ARGLIST = "[-hvt] [-s STEPS] atomname cell infile Rcut undisloc disloc";
+
+const int NFLAGS = 0;
+const char USERFLAGLIST[NFLAGS] = {}; // Would be the flag characters.
 
 const char* ARGEXPL = 
-" cell:      cell file (-h for format)\n\
-  infile:    input file (-h for format)\n\
-  undisloc:  undislocated crystal input XYZ file\n\
-  reference: reference crystal input XYZ file\n\
+"  atomname: appended to each line of xyz files\n\
+  cell:     cell file (-h for format)\n\
+  infile:   input file (-h for format)\n\
+  Rcut:     maximum cutoff radius for xyz files\n\
+  undisloc: undislocated crystal output file (can be -)\n\
+  disloc:   dislocated crystal output file (can be -)\n\
 \n\
   -s STEPS  number of integration steps\n\
   -v        verbosity\n\
@@ -273,13 +252,13 @@ const char* ARGEXPL =
 
 const char* FILEEXPL =
 "==== cell ====\n\
-a0                              # Scale factor for unit cell\n\
-a1.x a1.y a1.z                  # Cartesian coord of unit cell\n\
+a0                            # Scale factor for unit cell\n\
+a1.x a1.y a1.z                # Cartesian coord of unit cell\n\
 a2.x a2.y a2.z\n\
 a3.x a3.y a3.z\n\
-crystal-class <C_11> ... <C_66> # Crystal class and elastic const.\n\
-Natoms                          # Number of atoms in first unit cell\n\
-u1.1 u1.2 u1.3                  # Atom locations, in direct coord.\n\
+crystal-class <C_11> ... <C_66>  # Crystal class and elastic const.\n\
+Natoms                        # Number of atoms in first unit cell\n\
+u1.1 u1.2 u1.3                # Atom locations, in direct coord.\n\
 ...\n\
 uN.1 uN.2 uN.3\n\
 ==== cell ====\n\
@@ -288,21 +267,9 @@ uN.1 uN.2 uN.3\n\
 t1 t2 t3     # dislocation line direction (unit cell coord.)\n\
 b1 b2 b3 bd  # burgers vector (unit cell coord.)/bd \n\
 m1 m2 m3     # dislocation cut vector (perp. to t, in slip plane)\n\
-==== infile ====\n\
-\n\
-==== undisloc ====\n\
-N               # standard xyz format\n\
-comment         # this *should* be the threading length\n\
-atomtype x y z\n\
-...\n\
-==== undisloc ====\n\
-\n\
-==== reference ====\n\
-N               # standard xyz format\n\
-comment         # this *should* be the threading length\n\
-atomtype x y z\n\
-...\n\
-==== reference ====\n";
+c1 c2 c3 cd  # center of dislocation in unit cell ([c1 c2 c3]/cd)\n\
+c1' c2' c3'  # center of dislocation (shifts are added)\n\
+==== infile ====\n";
 
 int main ( int argc, char **argv ) 
 {
@@ -356,47 +323,56 @@ int main ( int argc, char **argv )
       fprintf(stderr, "Crystal classes:\n%s\n", CRYSTAL_CLASS);
       fprintf(stderr, "\nElastic constants ordering:\n");
       for (k=0; k<NCLASSES; ++k) {
-	    fprintf(stderr, "  Class %2d (%d):", k, class_len[k]);
-	    for (i=0; i<class_len[k]; ++i) {
-	      fprintf(stderr, " C_%2d", class_Cij[k][i]);
-        }
-	    fprintf(stderr, "\n");
+	fprintf(stderr, "  Class %2d (%d):", k, class_len[k]);
+	for (i=0; i<class_len[k]; ++i)
+	  fprintf(stderr, " C_%2d", class_Cij[k][i]);
+	fprintf(stderr, "\n");
       }
     }
     exit(ERROR);
   }
-
-
+  
   // ****************************** INPUT ****************************
   char dump[512];
-  char *cell_name = argv[0];
-  char *infile_name = argv[1];
-  char *undisloc_name = argv[2];
-  char *reference_name = argv[3];
   FILE* infile;
-  FILE* infile_ref;
+
+  // Let's pull off the args:
+  char* atom_name = argv[0];
+  char* cell_name = argv[1];
+  char* infile_name = argv[2];
+  double Rcut;
+  sscanf(argv[3], "%lf", &Rcut);
+  char* undisloc_name = argv[4];
+  char* disloc_name = argv[5];
+  
 
   double cart[9];
   int crystal; // crystal class
   double* Cmn_list; // elastic constant input
   double Cijkl[9][9];
+  int Natoms;
+  double** u_atoms;
 
   // disl. line, burgers vect, cut, center of dislocation (all in unit coord)
-  int tu0[3], bu0[3], mu0[3];		// all in unit cell coord; must be int.
-  int bu_denom;				// denominator for burgers vector (partials)
-  double t0[3], b0[3], m0[3], n0[3];	// n0 = t0 x m0, in cart. coord. 
+  int tu0[3], bu0[3], mu0[3], cu0[3]; // all in unit cell coord; must be int.
+  int bu_denom, cu_denom;             // denominator for burgers vector and c
+  double cint0[3], c0[3];             // c0 will be the *true* center; cint0
+                                      // is for converting cu0
+  double t0[3], b0[3], m0[3], n0[3];  // n0 = t0 x m0, in cart. coord. 
+
+  if (Rcut <= 0) {
+    fprintf(stderr, "Bad Rcut value (%lf)\n", Rcut);
+    exit(1);
+  }
 
   // First, read in the cell.
   infile = myopenr(cell_name);
   if (infile == NULL) {
     fprintf(stderr, "Couldn't open %s for reading.\n", cell_name);
-    exit(1);
+    exit(ERROR_NOFILE);
   }
-  {
-    int Natoms=NO_ATOMS;
-    double **u_atoms=NULL;
-    ERROR = read_cell(infile, cart, crystal, Cmn_list, u_atoms, Natoms);
-  }
+  Natoms = 0;
+  ERROR = read_cell(infile, cart, crystal, Cmn_list, u_atoms, Natoms);
   myclose(infile);
   
   if (ERROR != 0) {
@@ -408,29 +384,38 @@ int main ( int argc, char **argv )
   }
 
   if (TESTING)
-    verbose_output_cell(cart, crystal, Cmn_list, NULL, 0);
+    verbose_output_cell(cart, crystal, Cmn_list, u_atoms, Natoms);
 
   // Now, read in the dislocation information
   infile = myopenr(infile_name);
   if (infile == NULL) {
     fprintf(stderr, "Couldn't open %s for reading.\n", infile_name);
-    exit(1);
+    exit(ERROR_NOFILE);
   }
 
   // **** NOTE: all input in unit cell coord, so first three vect. are int.
   //  t1 t2 t3            # dislocation line
-  nextnoncomment(dump, sizeof(dump), infile);
+  char *p_fgets = fgets(dump, sizeof(dump), infile);
   sscanf(dump, "%d %d %d", &tu0[0], &tu0[1], &tu0[2]);
 
   //  b1 b2 b3            # burgers vector
-  nextnoncomment(dump, sizeof(dump), infile);
+  p_fgets = fgets(dump, sizeof(dump), infile);
   sscanf(dump, "%d %d %d %d", &bu0[0], &bu0[1], &bu0[2], &bu_denom);
   // For backwards compatibility...
   if (bu_denom == 0) bu_denom = 1;
 
   //  m1 m2 m3            # dislocation cut vector (perp. to t)
-  nextnoncomment(dump, sizeof(dump), infile);
+  p_fgets = fgets(dump, sizeof(dump), infile);
   sscanf(dump, "%d %d %d", &mu0[0], &mu0[1], &mu0[2]);
+
+  //  c1 c2 c3 cd           # center of dislocation
+  //  c1' c2' c3'
+  p_fgets = fgets(dump, sizeof(dump), infile);
+  sscanf(dump, "%d %d %d %d", &cu0[0], &cu0[1], &cu0[2], &cu_denom);
+  if (cu_denom == 0) cu_denom = 1;
+  p_fgets = fgets(dump, sizeof(dump), infile);
+  sscanf(dump, "%lf %lf %lf", &cint0[0], &cint0[1], &cint0[2]);
+  for (i=0; i<3; ++i) cint0[i] += ((double) cu0[i])/((double) cu_denom);
 
   myclose(infile);
 
@@ -438,6 +423,7 @@ int main ( int argc, char **argv )
   mult_vect(cart, tu0, t0);
   mult_vect(cart, bu0, b0); for (i=0; i<3; ++i) b0[i] *= 1./bu_denom;
   mult_vect(cart, mu0, m0);
+  mult_vect(cart, cint0, c0);
   // Sanity check on vectors:
   if ( dot(t0, t0) < 1e-8 ) {
     fprintf(stderr, "Bad t vector.\n");
@@ -479,6 +465,7 @@ int main ( int argc, char **argv )
     printf("# Burgers vector        (%.5lf %.5lf %.5lf), magn = %.5lf\n", 
 	   b0[0],b0[1],b0[2], sqrt(dot(b0,b0)));
     printf("# Cut direction         (%.5lf %.5lf %.5lf)\n",m0[0],m0[1],m0[2]);
+    printf("# Dislocation center    (%.5lf %.5lf %.5lf)\n",c0[0],c0[1],c0[2]);
   }
 
   // Calculate elastic constant matrix:
@@ -511,13 +498,6 @@ int main ( int argc, char **argv )
     printf("## Cut direction         (%.5lf %.5lf %.5lf)\n", m0[0],m0[1],m0[2]);
     printf("## Perp direction        (%.5lf %.5lf %.5lf)\n", n0[0],n0[1],n0[2]);
   }
-  if (VERBOSE) {
-     printf("# %17.12lf %17.12lf %17.12lf : normalized x axis\n", m0[0], m0[1], m0[2]);
-     printf("# %17.12lf %17.12lf %17.12lf : normalized y axis\n", n0[0], n0[1], n0[2]);
-     printf("# %17.12lf %17.12lf %17.12lf : normalized z axis\n",
-            t0[0]/sqrt(dot(t0,t0)), t0[1]/sqrt(dot(t0,t0)), t0[2]/sqrt(dot(t0,t0))); 
-  }
-
 
   // Now some evaluating of integrals :)
   double theta;
@@ -634,7 +614,7 @@ int main ( int argc, char **argv )
     mult_vect(sum, b0, u[k]);
     for (i=0; i<3; ++i) u[k][i] *= 0.5*M_1_PI;
   }
-
+  
   // Now, let's put those displacements into cylindrical coordinates:
   double** u_xyz;
   double tmagn;
@@ -653,6 +633,79 @@ int main ( int argc, char **argv )
     u_xyz[k][2] = dot(u[k-Nsteps], t0) * tmagn + u_xyz[Nsteps][2];
   }
 
+  // ************************* CYLINDRICAL SLAB **********************
+  int Nslab;
+  double** xyz;
+  double** xyz_d;
+  
+  if (VERBOSE) {
+     printf("# %17.12lf %17.12lf %17.12lf : normalized x axis\n", m0[0], m0[1], m0[2]);
+     printf("# %17.12lf %17.12lf %17.12lf : normalized y axis\n", n0[0], n0[1], n0[2]);
+     printf("# %17.12lf %17.12lf %17.12lf : normalized z axis\n",
+            t0[0]/sqrt(dot(t0,t0)), t0[1]/sqrt(dot(t0,t0)), t0[2]/sqrt(dot(t0,t0))); 
+  }
+  ERROR = construct_slab(t0, m0, n0, c0, Rcut, cart, u_atoms, Natoms,
+			 Nslab, xyz);
+  if (!ERROR) {
+    // Now, we need to do some analysis on our displacements; first,
+    // we need to calculate the distance from the dislocation,
+    // and the magical angle theta for each:
+    double* theta_i;
+    double* dist_i;
+    double min_dist;
+    theta_i = new double[Nslab];
+    dist_i = new double[Nslab];
+    min_dist = Rcut;
+    for (i=0; i<Nslab; ++i) {
+      dist_i[i] = sqrt( xyz[i][0]*xyz[i][0] + xyz[i][1]*xyz[i][1]);
+      if (dist_i[i] < min_dist) min_dist = dist_i[i];
+      theta_i[i] = atan2(xyz[i][1], xyz[i][0]) + M_PI/2.;
+      if (theta_i[i] < 0.) theta_i[i] += (2.*M_PI);
+    }
+    ERROR = dcomp(min_dist, 0.);
+    if (ERROR) {
+      fprintf(stderr, "You managed to center your dislocation right on an atom... that's not so good.\n");
+      xyz_d = NULL;
+    }
+    else {
+      // Now, let's treat the logarithmic part:
+      double u0[3], xyz0[3];
+      mult_vect(Sint, b0, u0);
+      for (i=0; i<3; ++i) u0[i] *= -0.5*M_1_PI;
+      xyz0[0] = dot(u0, m0);
+      xyz0[1] = dot(u0, n0);
+      xyz0[2] = dot(u0, t0)*tmagn;
+      // Our scaling factor:
+      double aln;
+      // double a0;
+      // a0 = exp( log(det(cart)/Natoms) / 3.);
+      // aln = -log(a0);
+      aln = - log(det(cart)/Natoms) / 3.;
+      
+      // Let's displace all of the atoms accordingly:
+      // xyz0*(ln|x| - ln(a0)) + u_xyz(theta)
+      double lnr, kreal, inv_dtheta;
+      double alpha, beta;
+      xyz_d = new double*[Nslab];
+      inv_dtheta = 1./dtheta;
+      for (i=0; i<Nslab; ++i) {
+	xyz_d[i] = new double[3];
+	lnr = log(dist_i[i]) + aln;
+	// Now, linearly interpolate for theta:
+	kreal = theta_i[i] * inv_dtheta;
+	k = (int) kreal;
+	alpha = kreal - k;
+	beta = 1. - alpha;
+	for (j=0; j<3; ++j)
+	  xyz_d[i][j] = xyz[i][j] + xyz0[j]*lnr
+	    + beta*u_xyz[k][j] + alpha*u_xyz[k+1][j];
+      }
+    }
+    // Garbage collection...
+    delete[] theta_i;
+    delete[] dist_i;
+  }
+  else xyz_d = NULL;
   
   // ****************************** OUTPUT ***************************
 
@@ -707,76 +760,40 @@ int main ( int argc, char **argv )
     fprintf(stderr, "An error occured, and we're getting out now.\n");
   }
   else {
-    // Now, let's treat the logarithmic part:
-    double u0[3], xyz0[3];
-    mult_vect(Sint, b0, u0);
-    for (i=0; i<3; ++i) u0[i] *= -0.5*M_1_PI;
-    xyz0[0] = dot(u0, m0);
-    xyz0[1] = dot(u0, n0);
-    xyz0[2] = dot(u0, t0)*tmagn;
-    // Our scaling factor:
-    double aln;
-    // double a0;
-    // a0 = exp( log(det(cart)/Natoms) / 3.);
-    // aln = -log(a0);
-    aln = - log(det(cart)) / 3.;
-    // for interpolation purposes:
-    double inv_dtheta = 1./dtheta;
-
     // Output XYZ files!!
-    infile = myopenr(undisloc_name);
-    infile_ref = myopenr(reference_name);
-    int Nslab;
-    // Natoms
-    nextnoncomment(dump, sizeof(dump), infile);
-    printf(dump);
-    sscanf(dump, "%d", &Nslab);
-    nextnoncomment(dump, sizeof(dump), infile_ref); // dummy readline
-    // comment
-    nextnoncomment(dump, sizeof(dump), infile);
-    printf(dump);
-    nextnoncomment(dump, sizeof(dump), infile_ref); // dummy readline
-    for (int n=0; n<Nslab; ++n) {
-      char atomname[512];
-      double xyz[3];
-      double xyz_ref[3];
-      // undislocated atom x y z
-      nextnoncomment(dump, sizeof(dump), infile);
-      sscanf(dump, "%s %lf %lf %lf", atomname, xyz, xyz+1, xyz+2);
-      // reference atom x y z
-      nextnoncomment(dump, sizeof(dump), infile_ref);
-      sscanf(dump, "%*s %lf %lf %lf", xyz_ref, xyz_ref+1, xyz_ref+2);
-
-      // Now, we need to do some analysis on our displacements; first,
-      // we need to calculate the distance from the dislocation,
-      // and the magical angle theta for each:
-      double dist_ref = sqrt( xyz_ref[0]*xyz_ref[0] + xyz_ref[1]*xyz_ref[1]);
-      ERROR = dcomp(dist_ref, 0.);
-      double theta_ref = atan2(xyz_ref[1], xyz_ref[0]);
-      if (theta_ref < 0.) theta_ref += (2.*M_PI);
-      if (ERROR) {
-	    fprintf(stderr, "You managed to center your dislocation right on an atom... that's not so good.\n");
-	    break;
-      }
-      
-      // Let's displace all of the atoms accordingly:
-      // xyz0*(ln|x| - ln(a0)) + u_xyz(theta)
-      double lnr = log(dist_ref) + aln;
-      // Now, linearly interpolate for theta:
-      double kreal = theta_ref * inv_dtheta;
-      int k = (int) kreal;
-      double alpha = kreal - k, beta = 1. - alpha;
-      for (int d=0; d<3; ++d) {
-	    xyz[d] += xyz0[d]*lnr + beta*u_xyz[k][d] + alpha*u_xyz[k+1][d];
-      }
-      // output
-      printf("%s %20.15lf %20.15lf %20.15lf\n", atomname, xyz[0], xyz[1], xyz[2]);
-    }
+    // First, the undislocated slab:
+    infile = myopenw(undisloc_name);
+    fprintf(infile, "%d\n", Nslab);
+    fprintf(infile, "%.15lf = z: undislocated slab, t = [%d %d %d], b = [%d %d %d]",
+	    sqrt(dot(t0,t0)),
+	    tu0[0], tu0[1], tu0[2], 
+	    bu0[0], bu0[1], bu0[2]);
+    if (bu_denom != 1) fprintf(infile, "/%d", bu_denom);
+    fprintf(infile, " Rmax = %.3lf\n", Rcut);
+    for (i=0; i<Nslab; ++i)
+      fprintf(infile, "%s %.15lf %.15lf %.15lf\n", atom_name,
+	      xyz[i][0], xyz[i][1], xyz[i][2]);
     myclose(infile);
-    myclose(infile_ref);
+    
+    // Next, the dislocated slab:
+    infile = myopenw(disloc_name);
+    fprintf(infile, "%d\n", Nslab);
+    fprintf(infile, "%.15lf = z: dislocated slab, t = [%d %d %d], b = [%d %d %d]",
+	    sqrt(dot(t0,t0)),
+	    tu0[0], tu0[1], tu0[2], 
+	    bu0[0], bu0[1], bu0[2]);
+    if (bu_denom != 1) fprintf(infile, "/%d", bu_denom);
+    fprintf(infile, " Rmax = %.3lf\n", Rcut);
+    for (i=0; i<Nslab; ++i)
+      fprintf(infile, "%s %.15lf %.15lf %.15lf\n", atom_name,
+	      xyz_d[i][0], xyz_d[i][1], xyz_d[i][2]);
+    myclose(infile);
   }
 
   // ************************* GARBAGE COLLECTION ********************
+  free_slab(Nslab, xyz);
+  free_slab(Nslab, xyz_d);
+  free_cell(Cmn_list, u_atoms, Natoms);
   for (i=0; i<=(2*Nsteps); ++i)
     delete[] u_xyz[i];
   delete[] u_xyz;
